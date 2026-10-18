@@ -11,6 +11,7 @@
 package comp3011;
 
 import java.io.File;
+import java.util.ArrayList;
 import java.util.function.BiConsumer;
 
 import javafx.scene.Scene;
@@ -33,16 +34,30 @@ public class VideoPlayerController {
 
     public VideoPlayerController(
             boolean audioEnabled,
-            BiConsumer<Integer, Integer> videoSizeChangedHandler) {
+            boolean multiThreaded,
+            BiConsumer<Integer, Integer> videoSizeChangedHandler,
+            ArrayList<FrameProcessor> processors) {
         this.view = new VideoPlayerView();
         this.videoSizeChangedHandler = videoSizeChangedHandler;
-        model = new VideoPlayerModel(
-                audioEnabled,
-                this::onVideoSizeChanged,
-                this::onFrameReady,
-                this::onStatusChanged,
-                this::onPlaybackStateChanged,
-                this::onAudioOutputStateChanged);
+        if (multiThreaded) {
+            model = new MultiThreadedVideoPlayerModel(
+                    audioEnabled,
+                    this::onVideoSizeChanged,
+                    this::onFrameReady,
+                    this::onStatusChanged,
+                    this::onPlaybackStateChanged,
+                    this::onAudioOutputStateChanged,
+                    processors);
+        } else {
+            model = new SingleThreadedVideoPlayerModel(
+                    audioEnabled,
+                    this::onVideoSizeChanged,
+                    this::onFrameReady,
+                    this::onStatusChanged,
+                    this::onPlaybackStateChanged,
+                    this::onAudioOutputStateChanged,
+                    processors);
+        }
 
         view.getStartOverButton().setOnAction(_ -> startOver());
         view.getBackFiveButton().setOnAction(_ -> backFiveSeconds());
