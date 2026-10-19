@@ -33,8 +33,6 @@ public class FrameJitterer extends FrameProcessor {
 
     private final int instanceIndex;
     private int mediaSeed;
-    private byte[] sourcePixels;
-    private byte[] blackRow;
 
     public FrameJitterer() {
         super();
@@ -45,11 +43,6 @@ public class FrameJitterer extends FrameProcessor {
     public void initialise(InfoVideo videoInfo) throws Exception {
         super.initialise(videoInfo);
         mediaSeed = saltedMediaSeed(videoInfo.mediaName(), instanceIndex + SEED_SALT);
-
-        int frameBytes = videoInfo.imageStride() * videoInfo.imageHeight();
-        int widthBytes = videoInfo.imageWidth() * videoInfo.imageChannels();
-        sourcePixels = new byte[frameBytes];
-        blackRow = new byte[widthBytes];
     }
 
     @Override
@@ -129,6 +122,8 @@ public class FrameJitterer extends FrameProcessor {
         int stride = videoInfo.imageStride();
         int frameBytes = stride * height;
         int widthBytes = width * channels;
+        byte[] sourcePixels = new byte[frameBytes];
+        byte[] blackRow = new byte[widthBytes];
 
         ByteBuffer source = pixels.duplicate();
         source.clear();
