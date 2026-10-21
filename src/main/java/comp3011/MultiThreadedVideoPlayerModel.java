@@ -11,11 +11,14 @@
 package comp3011;
 
 import java.io.File;
-import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Queue;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.LockSupport;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
@@ -44,7 +47,8 @@ public class MultiThreadedVideoPlayerModel implements VideoPlayerModel {
     private static final long AUDIO_LEAD_NS = 30_000_000L;
 
     private final List<FrameProcessor> frameProcessors;
-    private final Queue<PendingAudio> pendingAudio = new ArrayDeque<>();
+    // Written by the decode thread, drained by the FX thread, so it must be a concurrent queue.
+    private final Queue<PendingAudio> pendingAudio = new ConcurrentLinkedQueue<>();
     private final BiConsumer<Integer, Integer> videoSizeChangedHandler;
     private final Consumer<Image> frameReadyHandler;
     private final Consumer<String> statusChangedHandler;
@@ -62,11 +66,7 @@ public class MultiThreadedVideoPlayerModel implements VideoPlayerModel {
     private final AnimationTimer playbackTimer = new AnimationTimer() {
         @Override
         public void handle(long now) {
-            try {
-                pumpPlayback(now);
-            } catch (InterruptedException | ExecutionException e) {
-                throw new RuntimeException(e);
-            }
+            pumpPlayback(now);
         }
     };
 
@@ -74,7 +74,7 @@ public class MultiThreadedVideoPlayerModel implements VideoPlayerModel {
     private FFmpegFrameGrabber grabber; // This is the 3rd party video media decoder. It deals in JavaCV Frame objects.
     private JavaFXFrameConverter converter; // Takes Frame objects to JavaFX Image objects, which can be put on screen.
     private AudioPlayer audioPlayer; // This is ours. It has some real time buffering smarts.
-    private boolean playbackOpen; // True when playback is happening.
+    private volatile boolean playbackOpen; // True when playback is happening. Volatile: the decode thread polls it.
     private boolean pauseRequested;
     private boolean audioOutputEnabled;
     private boolean audioAvailable;
@@ -91,9 +91,44 @@ public class MultiThreadedVideoPlayerModel implements VideoPlayerModel {
     private long pauseStartedNs;
     private long relativeSeekBaseUs = NO_SEEK_REQUEST;
     private int framesBuffer = 48; // 2 seconds ahead
-    private final ArrayBlockingQueue<Future<PreparedFrame>> frameFutures = new ArrayBlockingQueue<>(framesBuffer);
     int cores = Runtime.getRuntime().availableProcessors();
     private final ExecutorService processingPool = Executors.newFixedThreadPool(cores);
+
+    // ---- Pipeline state: decode thread -> effect workers -> FX thread ----
+
+    // The only thread allowed to grab while playback is running. Started and stopped by the FX thread.
+    private Thread decodeThread;
+
+    // Guards the grabber. Held from grab() until the frame is stamped with its generation, and around
+    // setTimestamp() + invalidateQueuedFrames() on seek. Never block (queue put, semaphore) while holding it.
+    private final ReentrantLock grabberLock = new ReentrantLock();
+
+    // Changes on every seek / close. Frames stamped with an older value are stale and must be dropped.
+    private final AtomicInteger seekGeneration = new AtomicInteger(0);
+
+    // The generation in which the decoder ran off the end of the media, or -1. Written by the decode thread
+    // (under grabberLock), read by the FX thread to decide when playback has finished.
+    private volatile int endOfStreamGeneration = -1;
+
+    // Sequence number the decode thread gives the next frame it grabs. Guarded by grabberLock.
+    private int nextDecodeIndex = 0;
+
+    // Sequence number the FX thread is waiting to display next. Only touched on the FX thread.
+    private final AtomicInteger nextDisplayIndex = new AtomicInteger(0);
+
+    // Caps the frames anywhere in the pipeline: queued, inside a worker, or waiting for display. The decode
+    // thread takes one permit per frame, and that permit is given back exactly once, by whoever displays or
+    // drops the frame. This is what stops the decoder racing ahead (and what blocks it while paused).
+    private final Semaphore framesInFlight = new Semaphore(framesBuffer);
+
+    // Decode thread -> workers.
+    private final BlockingQueue<DecodedFrame> decodedFrames = new ArrayBlockingQueue<>(framesBuffer);
+
+    // Workers -> FX thread. Ordered by generation then index: stale frames surface at the head so the FX
+    // thread can drop them, and current frames come out in display order. Size is capped by framesInFlight.
+    private final PriorityBlockingQueue<SequencedFrame> processedFrames = new PriorityBlockingQueue<>(
+            framesBuffer,
+            Comparator.comparingInt(SequencedFrame::generation).thenComparingInt(SequencedFrame::index));
 
     public MultiThreadedVideoPlayerModel(
             boolean audioEnabled,
@@ -178,6 +213,7 @@ public class MultiThreadedVideoPlayerModel implements VideoPlayerModel {
 
     public void shutdown() {
         closePlaybackResources();
+        processingPool.shutdownNow(); // pool threads are non-daemon and would otherwise keep the JVM alive
     }
 
     private void seekRelative(long offsetUs) {
@@ -201,10 +237,16 @@ public class MultiThreadedVideoPlayerModel implements VideoPlayerModel {
         }
 
         try {
-            grabber.setTimestamp(grabTimestampUs);
+            grabberLock.lock();
+            try {
+                grabber.setTimestamp(grabTimestampUs);
+                invalidateQueuedFrames();
+            } finally {
+                grabberLock.unlock();
+            }
+            LockSupport.unpark(decodeThread); // wake it if it was idling at end of stream (no-op otherwise)
             resetPlaybackClock(logicalTimestampUs);
             flushAudioOutput();
-            prepareNextFrame();
             notifyPlaybackStateChanged();
         } catch (Exception e) {
             handlePlaybackError(e);
@@ -227,7 +269,7 @@ public class MultiThreadedVideoPlayerModel implements VideoPlayerModel {
             resetPlaybackClock(currentTimestampUs);
             playbackOpen = true;
             playbackTimer.start();
-            prepareNextFrame();
+            startDecodeThread();
             notifyPlaybackStateChanged();
         } catch (Exception e) {
             handlePlaybackError(e);
@@ -266,16 +308,65 @@ public class MultiThreadedVideoPlayerModel implements VideoPlayerModel {
         }
     }
 
-    private void closeProcessingThreads() {
-        for (Future<PreparedFrame> f : frameFutures) {
-            f.cancel(true);
+    // ---- Pipeline control (FX thread only) ----
+
+    private void startDecodeThread() {
+        decodeThread = new Thread(this::runDecodeLoop, "video-decoder");
+        decodeThread.setDaemon(true);
+        decodeThread.start();
+    }
+
+    // Interrupts the decode thread and waits for it to exit, so afterwards nothing else is inside the grabber.
+    // The wait is short: put(), acquire() and park() all respond to interrupt, and a native grab() just finishes.
+    private void stopDecodeThread() {
+        if (decodeThread == null) {
+            return;
         }
-        frameFutures.clear(); // reset prepared/preparing frames.
+        decodeThread.interrupt();
+        try {
+            decodeThread.join();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        decodeThread = null;
+    }
+
+    // Makes every frame currently in the pipeline stale and throws away the queued ones.
+    // Caller must hold grabberLock: then no frame of the new generation can exist yet, so draining
+    // the queues can only ever remove stale frames, never the first frame after a seek.
+    private void invalidateQueuedFrames() {
+        seekGeneration.incrementAndGet();
+        nextDecodeIndex = 0;
+        nextDisplayIndex.set(0);
+
+        List<DecodedFrame> discarded = new ArrayList<>();
+        decodedFrames.drainTo(discarded);
+        for (DecodedFrame decoded : discarded) {
+            decoded.frame().close(); // free the clone's native memory
+        }
+        framesInFlight.release(discarded.size());
+        discardProcessedFrames();
+    }
+
+    private void discardProcessedFrames() {
+        framesInFlight.release(processedFrames.drainTo(new ArrayList<>()));
+    }
+
+    // Close only: waits until every frame has left the pipeline, so no worker is still inside a FrameProcessor
+    // when the next playback re-initialises them. Workers check the generation between effects, so this is quick.
+    private void waitForPipelineToDrain() {
+        try {
+            while (!framesInFlight.tryAcquire(framesBuffer, 10, TimeUnit.MILLISECONDS)) {
+                discardProcessedFrames(); // a worker may have queued a frame after we last drained
+            }
+            framesInFlight.release(framesBuffer);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     private void resetPlaybackClock(long logicalTimestampUs) {
         pendingAudio.clear();
-        closeProcessingThreads();
         currentTimestampUs = logicalTimestampUs;
         relativeSeekBaseUs = logicalTimestampUs;
         firstTimestampUs = NO_SEEK_REQUEST;
@@ -291,32 +382,81 @@ public class MultiThreadedVideoPlayerModel implements VideoPlayerModel {
         pauseStartedNs = 0;
     }
 
-    private boolean canPrepareFrame() {
-        if (frameFutures.remainingCapacity() == 0) {
-            return false;
+    // ---- Decode thread ----
+
+    // Runs until stopDecodeThread() interrupts it. Each pass: reserve a pipeline slot, grab + stamp under the
+    // lock, then hand the frame to the pool outside the lock. Blocking only ever happens outside grabberLock,
+    // so the FX thread can always take the lock to seek.
+    private void runDecodeLoop() {
+        try {
+            while (playbackOpen && !Thread.currentThread().isInterrupted()) {
+                framesInFlight.acquire(); // blocks while the pipeline is full, e.g. when paused
+
+                DecodedFrame decoded;
+                try {
+                    decoded = grabAndStampNextVideoFrame();
+                } catch (Exception e) {
+                    framesInFlight.release();
+                    throw e;
+                }
+
+                if (decoded == null) {
+                    framesInFlight.release();
+                    waitForSeekAfterEndOfStream();
+                    continue;
+                }
+
+                try {
+                    decodedFrames.put(decoded);
+                } catch (InterruptedException e) {
+                    decoded.frame().close();
+                    framesInFlight.release();
+                    throw e;
+                }
+                processingPool.submit(this::processNextDecodedFrame);
+            }
+        } catch (InterruptedException e) {
+            // Asked to stop by stopDecodeThread().
+        } catch (Exception e) {
+            if (!Thread.currentThread().isInterrupted()) {
+                Platform.runLater(() -> handlePlaybackError(e)); // GUI/resource work belongs on the FX thread
+            }
         }
-        return true;
     }
 
-    private PreparedFrame prepareNextFrame() {
+    // After end of stream the decoder idles until a seek moves the grabber somewhere else (seekTo unparks it),
+    // or until it is stopped. The FX thread decides when playback has finished, once the last frame is shown.
+    private void waitForSeekAfterEndOfStream() {
+        int endGeneration = endOfStreamGeneration;
+        while (seekGeneration.get() == endGeneration && !Thread.currentThread().isInterrupted()) {
+            LockSupport.park(this);
+        }
+    }
+
+    // Everything that reads the grabber's shared state happens inside one critical region, so the
+    // frame data, its timestamp, its frame number and its generation stamp all describe the same grab.
+    private DecodedFrame grabAndStampNextVideoFrame() throws Exception {
+        grabberLock.lock();
         try {
             return readNextVideoFrame();
-        } catch (Exception e) {
-            handlePlaybackError(e);
-            return null;
+        } finally {
+            grabberLock.unlock();
         }
     }
 
-    private PreparedFrame readNextVideoFrame() throws Exception {
+    // Caller must hold grabberLock. Returns null at end of stream or if playback was closed.
+    private DecodedFrame readNextVideoFrame() throws Exception {
         while (playbackOpen) {
             Frame frame = grabFrame();
             if (frame == null) {
-                finishPlayback();
+                // Read under grabberLock, so this names the generation whose position just ran off the end.
+                endOfStreamGeneration = seekGeneration.get();
                 return null;
             }
 
             long timestampUs = grabber.getTimestamp();
             if (audioAvailable && frame.samples != null) {
+                // copySamples() copies out of the grabber's buffer, so this must stay inside the lock.
                 queueAudio(timestampUs, frame);
             }
 
@@ -348,25 +488,65 @@ public class MultiThreadedVideoPlayerModel implements VideoPlayerModel {
                 }
             }
 
-            int frameNumber = grabber.getFrameNumber();
-            InfoFrame info = new InfoFrame(frameNumber, timestampUs);
-            processFrame(frame, info);
-
-            Image image = converter.convert(frame);
             long relativeTimestampUs = Math.max(0, timestampUs - firstTimestampUs);
             long logicalTimestampUs = logicalPlaybackBaseUs + relativeTimestampUs;
             long targetTimeNs = playbackStartNs + relativeTimestampUs * 1_000L;
 
-            return new PreparedFrame(
-                    image,
-                    frameNumber,
+            return new DecodedFrame(
+                    seekGeneration.get(),
+                    nextDecodeIndex++,
+                    frame.clone(), // deep copy: the next grab() overwrites the grabber's own buffer
+                    grabber.getFrameNumber(),
                     timestampUs,
                     logicalTimestampUs,
-                    targetTimeNs,
-                    System.nanoTime());
+                    targetTimeNs);
         }
 
         return null;
+    }
+
+    // Pool worker. One task is submitted per decoded frame, so normally there is a frame waiting.
+    // poll() (not take()) because a seek may have drained the queue, and a blocked worker would leak.
+    private void processNextDecodedFrame() {
+        DecodedFrame decoded = decodedFrames.poll();
+        if (decoded == null) {
+            return; // its frame was discarded by a seek/close, which already gave back its permit
+        }
+
+        boolean queuedForDisplay = false;
+        try (Frame frame = decoded.frame()) { // close() frees the clone's native memory once we're done
+            if (decoded.generation() != seekGeneration.get()) {
+                return; // stale: decoded before the latest seek
+            }
+
+            processFrame(frame, new InfoFrame(decoded.frameNumber(), decoded.timestampUs()), decoded.generation());
+
+            JavaFXFrameConverter frameConverter = converter; // read once; it's nulled on close
+            if (frameConverter == null || decoded.generation() != seekGeneration.get()) {
+                return;
+            }
+            Image image = frameConverter.convert(frame); // copies pixels, so closing the frame after is safe
+
+            processedFrames.put(new SequencedFrame(
+                    decoded.generation(),
+                    decoded.index(),
+                    new PreparedFrame(
+                            image,
+                            decoded.frameNumber(),
+                            decoded.timestampUs(),
+                            decoded.logicalTimestampUs(),
+                            decoded.targetTimeNs(),
+                            System.nanoTime())));
+            queuedForDisplay = true; // from here the FX thread owns the permit
+        } catch (Exception e) {
+            if (decoded.generation() == seekGeneration.get()) {
+                Platform.runLater(() -> handlePlaybackError(e));
+            }
+        } finally {
+            if (!queuedForDisplay) {
+                framesInFlight.release(); // dropped here, so give its pipeline slot back
+            }
+        }
     }
 
     // This is called on a heart beat by the GUI thread. We want to be co-operative here by (a) not blocking, and (b)
@@ -375,34 +555,42 @@ public class MultiThreadedVideoPlayerModel implements VideoPlayerModel {
     // (2) display a frame if it is due and (3) prepare the next frame if we're in the window after the previous frame
     // has gone to the display. We don't buffer frames here, just handling them one at a time. Not a great architecture,
     // living on the edge a bit, but can't do much better on a single thread.
-    private void pumpPlayback(long now) throws InterruptedException, ExecutionException {
+    private void pumpPlayback(long now) {
         if (!playbackOpen) {
             return;
         }
 
-        // Task (1)
+        // Task (1) done in the fx thread
         writeDueAudio(now);
 
-        // Task (2)
-        if (frameFutures.peek().isDone() && frameFutures.peek().get().targetTimeNs() <= now) {
-            // We have a prepared frame ready to go and it is due (or just past due!) so get it up on screen ASAP!
-            displayPreparedFrame(now);
+        // Task (2): drop frames from before the latest seek. They sort first (lower generation), so they
+        // surface at the head. remove(head) rather than poll() in case a worker inserted something meanwhile.
+        SequencedFrame head;
+        while ((head = processedFrames.peek()) != null && head.generation() != seekGeneration.get()) {
+            if (processedFrames.remove(head)) {
+                framesInFlight.release();
+            }
         }
 
-        // task 3
-        if (!pauseRequested) {
-            int maxAdds = 10;
-            while (canPrepareFrame() && maxAdds > 0) {
-                frameFutures.put(processingPool.submit(this::prepareNextFrame));
-                maxAdds--;
-            }
+        // Only the next frame in sequence may be shown; a later frame that finished early waits its turn.
+        if (head != null
+                && head.index() == nextDisplayIndex.get()
+                && head.prepared().targetTimeNs() <= now
+                && processedFrames.remove(head)) {
+            nextDisplayIndex.incrementAndGet();
+            framesInFlight.release();
+            displayPreparedFrame(head.prepared());
+            return;
+        }
+
+        // Task (3): the decoder hit the end and every frame has left the pipeline, so the last one has been shown.
+        if (endOfStreamGeneration == seekGeneration.get()
+                && framesInFlight.availablePermits() == framesBuffer) {
+            finishPlayback();
         }
     }
 
-
-
-    private void displayPreparedFrame(long now) throws InterruptedException, ExecutionException {
-        PreparedFrame frame = frameFutures.poll().get(); // removes the head from queue
+    private void displayPreparedFrame(PreparedFrame frame) {
         currentTimestampUs = frame.logicalTimestampUs();
         relativeSeekBaseUs = NO_SEEK_REQUEST;
 
@@ -489,7 +677,18 @@ public class MultiThreadedVideoPlayerModel implements VideoPlayerModel {
     private void closePlaybackResources() {
         playbackTimer.stop();
         playbackOpen = false;
-        closeProcessingThreads();
+
+        // Order matters: stop the only other grabber user, make everything in flight stale, then wait for
+        // workers to leave the FrameProcessors. Only after that is it safe to close the grabber and converter.
+        stopDecodeThread();
+        grabberLock.lock();
+        try {
+            invalidateQueuedFrames();
+        } finally {
+            grabberLock.unlock();
+        }
+        waitForPipelineToDrain();
+
         pendingAudio.clear();
         firstTimestampUs = NO_SEEK_REQUEST;
         playbackStartNs = 0;
@@ -554,8 +753,12 @@ public class MultiThreadedVideoPlayerModel implements VideoPlayerModel {
         return Math.max(0, durationUs - frameDurationUs);
     }
 
-    private void processFrame(Frame frame, InfoFrame info) throws Exception {
+    private void processFrame(Frame frame, InfoFrame info, int generation) throws Exception {
         for (FrameProcessor processor : frameProcessors) {
+            // Stop early if a seek or close made this frame stale; its output would be dropped anyway.
+            if (generation != seekGeneration.get()) {
+                return;
+            }
             processor.process(frame, info);
         }
     }
@@ -606,6 +809,24 @@ public class MultiThreadedVideoPlayerModel implements VideoPlayerModel {
             long logicalTimestampUs,
             long targetTimeNs,
             long preparedAtNs) {
+    }
+
+    // A frame straight off the decode thread, already clone()d so it no longer shares the grabber's buffers.
+    private record DecodedFrame(
+            int generation,
+            int index,
+            Frame frame,
+            int frameNumber,
+            long timestampUs,
+            long logicalTimestampUs,
+            long targetTimeNs) {
+    }
+
+    // A fully prepared frame plus the tags the FX thread needs to order it and reject stale ones.
+    private record SequencedFrame(
+            int generation,
+            int index,
+            PreparedFrame prepared) {
     }
 
     private static class PendingAudio {

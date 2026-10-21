@@ -1,0 +1,13 @@
+FrameMottler.java
+- Removed the per-block instance fields blockBlueScaleIndex, blockGreenScaleIndex and blockRedScaleIndex.
+- prepareScaleIndicesForBlock now returns an int[] of {blue, green, red} scale lookup indices, or null if the block is undamaged (previously it returned a boolean and stored the indices in fields).
+- Renamed setBlockScaleIndices to computeBlockScaleIndices; it now returns the indices instead of setting fields.
+- mottleFrame holds the returned indices in a local and passes them to applyMottleBlock, which takes a new int[] scaleIndices parameter.
+- Updated the class Javadoc link for applyMottleBlock to the new signature.
+- Replaced cachedDamageMaskSegment, damageMaskA, damageMaskB (and the unused damageMasks) with a 3-slot AtomicReferenceArray<DamageMask> cache. DamageMask is a record {index, field} that is never modified after being stored.
+- Removed ensureDamageMaskFields; added damageMask(index), which looks in slot index % 3, returns the mask on a hit, and otherwise builds it. The new mask is only stored if the current thread is not interrupted, so cancelled frames cannot evict masks live frames need.
+- process() fetches masks segment and segment + 1 into locals and passes them through mottleFrame, prepareScaleIndicesForBlock and sampleDamageMask as new damageMaskA/damageMaskB parameters (previously read from shared fields).
+- initialise() clears the damage mask cache, since a new video changes the media seed.
+
+MultiThreadedVideoPlayerModel.java
+- processFrame checks Thread.currentThread().isInterrupted() before each processor and returns early if the frame's task was cancelled.
