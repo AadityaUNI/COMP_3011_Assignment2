@@ -4,7 +4,7 @@
  * 
  * Authors:
  *   1. Simon Ratcliffe, in collaboration with GPT-5.6 Terra
- *   2. <student name and student number insert here upon modification>
+ *   2. Aaditya Singh, A1946894
  *
  * Copyright 2026 Simon Ratcliffe
  */
@@ -25,6 +25,14 @@ import org.bytedeco.javacv.Frame;
  * Initialisation builds multi-scale noise fields and colour lookup tables.
  * {@link #process(Frame, InfoFrame)} samples those fields in image blocks and
  * applies the selected channel scales through {@link #applyMottleBlock(ByteBuffer, int, int, int, int, int, int, int[])}.
+ * </p>
+ *
+ * <p>
+ * Thread safety: the multi-threaded model shares this one instance between concurrent workers, each processing a
+ * different frame. Everything set in {@link #initialise(InfoVideo)} is read-only afterwards, and the noise fields are
+ * built from local arrays seeded by the frame number, so a frame's result does not depend on which worker ran it.
+ * The only state workers change is {@code damageMaskCache}, which is deliberately safe to race on (see
+ * {@link #damageMask(int)}).
  * </p>
  */
 public class FrameMottler extends FrameProcessor {
@@ -182,10 +190,9 @@ public class FrameMottler extends FrameProcessor {
         }
 
         double[] field = buildNoiseField(index, DAMAGE_MASK_SALT, DAMAGE_MASK_SMOOTHING_PASSES);
-        // A cancelled (interrupted) frame still gets a correct mask, but must not evict one the live frames need.
-        if (!Thread.currentThread().isInterrupted()) {
-            damageMaskCache.set(slot, new DamageMask(index, field));
-        }
+        // Always safe to store: masks are deterministic and a lookup checks the index, so the worst a stale
+        // frame (e.g. one decoded just before a seek) can do is evict a mask that then gets rebuilt identically.
+        damageMaskCache.set(slot, new DamageMask(index, field));
         return field;
     }
 

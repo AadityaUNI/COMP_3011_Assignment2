@@ -4,7 +4,7 @@
  * 
  * Authors:
  *   1. Simon Ratcliffe, in collaboration with GPT-5.6 Terra
- *   2. <student name and student number insert here upon modification>
+ *   2. Aaditya Singh, A1946894
  *
  * Copyright 2026 Simon Ratcliffe
  */
@@ -24,6 +24,13 @@ import org.bytedeco.javacv.Frame;
  * A deterministic per-frame random sequence chooses horizontal and vertical
  * offsets. {@link #jitterFrame(ByteBuffer, int, int)} copies the original pixels
  * into the shifted position and fills exposed areas with black.
+ * </p>
+ *
+ * <p>
+ * Thread safety: the multi-threaded model shares this one instance between concurrent workers, each processing a
+ * different frame. {@code mediaSeed} is only written in {@link #initialise(InfoVideo)} and the {@code Random} is
+ * created fresh from the frame number inside {@link #process(Frame, InfoFrame)}, so the result for a frame depends
+ * only on that frame and never on which worker ran it or in what order.
  * </p>
  */
 public class FrameJitterer extends FrameProcessor {

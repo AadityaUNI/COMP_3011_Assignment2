@@ -1,3 +1,9 @@
+/*
+ * Tests for the command line parsing in comp3011.CommandLineController.
+ *
+ * Authors:
+ *   1. Aaditya Singh, A1946894
+ */
 import comp3011.CommandLineController;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -13,8 +19,16 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 
 public class CommandLineControllerTests {
 
-    private String video(){
-        return "movie.mp4";
+    @TempDir
+    Path tempDir;
+
+    // The parser only checks the file exists, so an empty placeholder keeps the tests independent of a real movie.mp4.
+    private String video() throws IOException {
+        Path movie = tempDir.resolve("movie.mp4");
+        if (!Files.exists(movie)) {
+            Files.createFile(movie);
+        }
+        return movie.toString();
     }
 
     private static List<String> processorNames(CommandLineController clc) {
@@ -39,6 +53,34 @@ public class CommandLineControllerTests {
         assertEquals(true, mixed.isMaximiseRequested());
         assertEquals(2, mixed.getDisplayId());
         assertNotNull(mixed.getVideoFile());
+    }
+
+    @Test
+    void threadingModeParse() throws IOException {
+        // multi-threaded is the default
+        CommandLineController defaultMode = new CommandLineController(new String[]{"-s", video()});
+        assertNull(defaultMode.getErrorMessage());
+        assertEquals(false, defaultMode.isSingleThreadingRequested());
+        assertEquals(List.of("FrameScratcher"), processorNames(defaultMode));
+
+        // --single selects the original player and is not mistaken for an effect chain
+        CommandLineController single = new CommandLineController(new String[]{"--single", "-s", video()});
+        assertNull(single.getErrorMessage());
+        assertEquals(true, single.isSingleThreadingRequested());
+        assertEquals(List.of("FrameScratcher"), processorNames(single));
+    }
+
+    @Test
+    void helpWithoutFile() {
+        // help on its own needs no video file
+        CommandLineController helpOnly = new CommandLineController(new String[]{"--help"});
+        assertNull(helpOnly.getErrorMessage());
+        assertEquals(0, helpOnly.getExitCode());
+
+        // effects with no video file are an error even when help is requested
+        CommandLineController effectsAndHelp = new CommandLineController(new String[]{"--number-frames", "-h"});
+        assertEquals("No video file specified.", effectsAndHelp.getErrorMessage());
+        assertEquals(1, effectsAndHelp.getExitCode());
     }
 
     @Test

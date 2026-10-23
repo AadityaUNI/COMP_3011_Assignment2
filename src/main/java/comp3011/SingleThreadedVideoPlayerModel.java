@@ -4,7 +4,7 @@
  * 
  * Authors:
  *   1. Simon Ratcliffe, in collaboration with GPT-5.6 Terra
- *   2. <student name and student number insert here upon modification>
+ *   2. Aaditya Singh, A1946894
  *
  * Copyright 2026 Simon Ratcliffe
  */
@@ -40,8 +40,8 @@ import javafx.scene.image.Image;
  *
  * <p>
  * Retained unchanged as the reference baseline for performance comparison
- * against {@link MultiThreadedVideoPlayerModel}. This is the default model;
- * the multi-threaded model is selected with the {@code --multi} command line flag.
+ * against {@link MultiThreadedVideoPlayerModel}, which is the default model.
+ * This one is only used when the {@code --single} command line flag is given.
  * </p>
  */
 public class SingleThreadedVideoPlayerModel implements VideoPlayerModel {

@@ -4,7 +4,7 @@
  * 
  * Authors:
  *   1. Simon Ratcliffe, in collaboration with GPT-5.6 Terra
- *   2. <student name and student number insert here upon modification>
+ *   2. Aaditya Singh, A1946894
  *
  * Copyright 2026 Simon Ratcliffe
  */
@@ -31,14 +31,21 @@ public class CommandLineController {
     private boolean helpRequested;
     private boolean audioRequested;
     private boolean maximiseRequested;
-    private boolean multiThreadingRequested;
+    private boolean singleThreadingRequested;
     private Integer displayId;
     private File videoFile;
     private String errorMessage;
     private ArrayList<FrameProcessor> processorsRequested = new ArrayList<>();
     private final HashMap<Character, Supplier<FrameProcessor>> validEffects = new HashMap<>();
 
-    // add all valid effects
+    // All valid effects, keyed by the single letter used on the command line (e.g. "-jm" applies jitter then mottle).
+    // To add a new effect:
+    //   1. Write a class extending FrameProcessor. Override initialise() for one-off setup per video and process()
+    //      for the per-frame work. The multi-threaded model shares one instance between concurrent workers, so
+    //      process() must keep per-frame state in local variables, not fields.
+    //   2. Register it here with an unused letter, e.g. validEffects.put('x', FrameExample::new);
+    //   3. List the letter in the help text printed by --help, and add it to the tests.
+    // A Supplier (not an instance) is stored so each run gets a fresh processor, in the order the user typed them.
     {
         validEffects.put('n', FrameNumberer::new);
         validEffects.put('s', FrameScratcher::new);
@@ -88,8 +95,8 @@ public class CommandLineController {
         return maximiseRequested;
     }
 
-    public boolean isMultiThreadingRequested() {
-        return multiThreadingRequested;
+    public boolean isSingleThreadingRequested() {
+        return singleThreadingRequested;
     }
 
     public boolean shouldLaunchApplication() {
@@ -105,9 +112,9 @@ public class CommandLineController {
                 audioRequested = true;
             } else if ("-x".equals(arg) || "--maximise".equals(arg)) {
                 maximiseRequested = true;
-            } else if ("--multi".equals(arg)) {
-                // No short form: -m is already the mottle effect.
-                multiThreadingRequested = true;
+            } else if ("--single".equals(arg)) {
+                // No short form: -s is already the scratch effect.
+                singleThreadingRequested = true;
             } else if ("-1".equals(arg) || "--monitor-1".equals(arg)) {
                 setDisplayId(1);
             } else if ("-2".equals(arg) || "--monitor-2".equals(arg)) {
@@ -152,7 +159,8 @@ public class CommandLineController {
                 videoFile = null;
             }
         } else {
-            if (!helpRequested) {
+            // Help on its own needs no file, but effects with nothing to apply them to are still an error.
+            if (!helpRequested || !processorsRequested.isEmpty()) {
                 errorMessage = "No video file specified.";
             }
         }
@@ -193,9 +201,25 @@ public class CommandLineController {
         System.out.println("  -h, --help         Show this help message");
         System.out.println("  -a, --audio        Play audio");
         System.out.println("  -x, --maximise     Open the player maximised");
-        System.out.println("      --multi        Use the multi-threaded player (default is single-threaded)");
         System.out.println("  -1, --monitor-1    Open the player on display 1");
         System.out.println("  -2, --monitor-2    Open the player on display 2");
+        System.out.println();
+        System.out.println("Frame processors:");
+        System.out.println("  -n, --number-frames    Render the frame number onto each frame");
+        System.out.println("  -s, --scratch-frames   Render vertical film scratches");
+        System.out.println("  -f, --flicker-frames   Randomly dim frames");
+        System.out.println("  -w, --black-and-white  Convert frames to black and white");
+        System.out.println("  -y, --yellow-frames    Apply a warmer colour temperature");
+        System.out.println("  -v, --vignette-frames  Darken the frame edges");
+        System.out.println("  -d, --dust-frames      Render dust and hair marks");
+        System.out.println("  -j, --jitter-frames    Randomly displace frames by a few pixels");
+        System.out.println("  -m, --mottle-frames    Add cloudy emulsion mottling");
+        System.out.println("  -b, --bleed-frames     Bleed light into frames");
+        System.out.println("  -p, --pepper-frames    Pepper frames with dark spots/blotches");
+        System.out.println();
+        System.out.println("Frame processors are applied in command-line order and may be repeated.");
+        System.out.println("Example: -nssnfwyvdjmbp numbers, scratches twice, numbers again, flickers,");
+        System.out.println("converts, warms, vignettes, dusts, jitters, mottles, bleeds, then peppers.");
     }
 
     public ArrayList<FrameProcessor> getProcessors() {

@@ -4,7 +4,7 @@
  * 
  * Authors:
  *   1. Simon Ratcliffe, in collaboration with GPT-5.6 Terra
- *   2. <student name and student number insert here upon modification>
+ *   2. Aaditya Singh, A1946894
  *
  * Copyright 2026 Simon Ratcliffe
  */
@@ -34,13 +34,14 @@ public class VideoPlayerController {
 
     public VideoPlayerController(
             boolean audioEnabled,
-            boolean multiThreaded,
+            boolean singleThreaded,
             BiConsumer<Integer, Integer> videoSizeChangedHandler,
             ArrayList<FrameProcessor> processors) {
         this.view = new VideoPlayerView();
         this.videoSizeChangedHandler = videoSizeChangedHandler;
-        if (multiThreaded) {
-            model = new MultiThreadedVideoPlayerModel(
+        // Multi-threaded is the default; the single-threaded original is kept behind --single as a baseline.
+        if (singleThreaded) {
+            model = new SingleThreadedVideoPlayerModel(
                     audioEnabled,
                     this::onVideoSizeChanged,
                     this::onFrameReady,
@@ -49,7 +50,7 @@ public class VideoPlayerController {
                     this::onAudioOutputStateChanged,
                     processors);
         } else {
-            model = new SingleThreadedVideoPlayerModel(
+            model = new MultiThreadedVideoPlayerModel(
                     audioEnabled,
                     this::onVideoSizeChanged,
                     this::onFrameReady,

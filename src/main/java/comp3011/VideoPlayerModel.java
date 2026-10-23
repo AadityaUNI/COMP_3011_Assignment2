@@ -4,7 +4,7 @@
  *
  * Authors:
  *   1. Simon Ratcliffe, in collaboration with GPT-5.6 Terra
- *   2. <student name and student number insert here upon modification>
+ *   2. Aaditya Singh, A1946894
  *
  * Copyright 2026 Simon Ratcliffe
  */
@@ -18,8 +18,8 @@ import java.io.File;
  * <p>
  * Defines the playback operations the {@link VideoPlayerController} drives, so the
  * controller is independent of the concurrency model in use. Implementations are
- * {@link SingleThreadedVideoPlayerModel} (the original reference design, default)
- * and {@link MultiThreadedVideoPlayerModel} (selected with {@code --multi}).
+ * {@link MultiThreadedVideoPlayerModel} (the default) and
+ * {@link SingleThreadedVideoPlayerModel} (the original reference design, selected with {@code --single}).
  * </p>
  */
 public interface VideoPlayerModel {

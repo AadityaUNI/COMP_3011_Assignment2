@@ -4,7 +4,7 @@
  * 
  * Authors:
  *   1. Simon Ratcliffe, in collaboration with GPT-5.6 Terra
- *   2. <student name and student number insert here upon modification>
+ *   2. Aaditya Singh, A1946894
  *
  * Copyright 2026 Simon Ratcliffe
  */
@@ -23,6 +23,14 @@ import org.bytedeco.javacv.Frame;
  * regions, {@link #blurBrightMask()} spreads their influence, and
  * {@link #applyBleed(ByteBuffer)} adds the resulting coloured glow.
  * </p>
+ *
+ * <p>
+ * Thread safety: the multi-threaded model shares this one instance between concurrent workers, each processing a
+ * different frame. The fields below are therefore only written in {@link #initialise(InfoVideo)} (before any
+ * worker runs) and are read-only afterwards. The per-frame masks are allocated inside
+ * {@link #process(Frame, InfoFrame)} and passed down as arguments, never stored in fields, so two frames can never
+ * see each other's masks.
+ * </p>
  */
 public class FrameBleeder extends FrameProcessor {
     private static final int MASK_BLOCK_SIZE = 4;
@@ -36,9 +44,6 @@ public class FrameBleeder extends FrameProcessor {
 
     private int maskWidth;
     private int maskHeight;
-//    private double[] brightMask;
-//    private double[] horizontalBlurMask;
-//    private double[] blurredMask;
     private int[] xMaskLeft;
     private double[] xMaskBlend;
     private int[] yMaskTop;
