@@ -30,6 +30,7 @@ import org.bytedeco.javacv.JavaFXFrameConverter;
 import javafx.animation.AnimationTimer;
 import javafx.application.Platform;
 import javafx.scene.image.Image;
+import javafx.scene.image.WritableImage;
 
 /**
  * The multi-threaded implementation of {@link VideoPlayerModel}. This is the
@@ -46,7 +47,8 @@ import javafx.scene.image.Image;
  * </pre>
  * <ul>
  * <li><b>FX thread</b>: owns all control (play, pause, seek, stop), the playback clock, audio output and the choice
- * of when each frame is shown. {@code pumpPlayback} runs on its {@link AnimationTimer} and never blocks.</li>
+ * of when each frame is shown. {@code pumpPlayback} runs on its {@link AnimationTimer} and never blocks. It shows
+a frame by copying its pixels into one reused on-screen image ({@code showOnScreen}).</li>
  * <li><b>Decode thread</b> ("video-decoder"): the only thread that grabs from FFmpeg while playback is running.
  * It reads one frame at a time, queues that frame's audio and hands the video frame to the pool.</li>
  * <li><b>Effect workers</b> ({@code processingPool}): run the {@link FrameProcessor} stack on a private copy of
@@ -148,12 +150,16 @@ public class MultiThreadedVideoPlayerModel implements VideoPlayerModel {
     private long playbackStartNs;
     private long pauseStartedNs;
     private long relativeSeekBaseUs = NO_SEEK_REQUEST;
+    // FX thread only. The one image the view shows; each frame's pixels are copied into it (see showOnScreen).
+    // Null whenever it is not on screen, so we never write into an image the view has let go of.
+    private WritableImage screenImage;
     private int framesBuffer = 35; // ~1.5 seconds ahead at 24fps; smaller refill burst after each seek
     // CPU budget: decoding one video is cheap, so FFmpeg gets 2 threads (left alone it starts cores + 1).
-    // The effect workers get the rest minus 3 cores, kept free for our decode thread, the FX thread and the
-    // JavaFX render thread. Never 0: a 0-thread pool throws.
+    // The effect workers get every core but one, left for our decode thread. They don't need to leave room for
+    // the FX and render threads: they run below normal priority (see below), so those threads still go first
+    // when every core is busy. Heavy effect chains need the workers. Never 0: a 0-thread pool throws.
     private static final int CORES = Runtime.getRuntime().availableProcessors();
-    private static final int PROCESSING_THREADS = Math.max(1, CORES - 3);
+    private static final int PROCESSING_THREADS = Math.max(1, CORES - 2);
     private static final int DECODER_THREADS = 2;
     // Workers run one step below normal priority (Windows "below normal"). It only matters when every core is busy,
     // e.g. the refill burst after a seek: the JavaFX FX and render threads then get the CPU first, so frames still
@@ -282,6 +288,7 @@ public class MultiThreadedVideoPlayerModel implements VideoPlayerModel {
         currentTimestampUs = 0;
         pauseRequested = false;
         notifyStatusChanged("Stopped");
+        screenImage = null; // the view is cleared, so the next frame must hand it a fresh image
         notifyFrameReady(null);
         notifyPlaybackStateChanged();
     }
@@ -708,7 +715,26 @@ public class MultiThreadedVideoPlayerModel implements VideoPlayerModel {
             }
         }
 
-        notifyFrameReady(frame.image());
+        showOnScreen(frame.image());
+    }
+
+    // FX thread only. Shows a frame by copying its pixels into the one image already on screen, instead of handing
+    // the view a new image every frame. JavaFX gives every new on-screen image its own GPU texture (~6 MB at 1080p)
+    // and only frees it once that image is garbage-collected, so a new image per frame fills the texture pool in a
+    // few seconds. The render thread then forces a full System.gc(), which stalls the screen for a run of frames.
+    // Reusing one image keeps one texture, which JavaFX just updates in place. The per-frame images from the
+    // workers are never shown, so they never get a texture and are collected as ordinary heap garbage.
+    private void showOnScreen(Image frameImage) {
+        int width = (int) frameImage.getWidth();
+        int height = (int) frameImage.getHeight();
+        if (screenImage == null
+                || (int) screenImage.getWidth() != width
+                || (int) screenImage.getHeight() != height) {
+            screenImage = new WritableImage(width, height);
+            notifyFrameReady(screenImage); // only when the image changes; after that its pixels are updated in place
+        }
+        // Measured at 1920x800: ~0.6-1.5ms per frame on average, under 5ms at worst, out of a 41.7ms frame.
+        screenImage.getPixelWriter().setPixels(0, 0, width, height, frameImage.getPixelReader(), 0, 0);
     }
 
     // Decode thread, holding grabberLock. Being under the lock is what lets a seek clear stale audio safely.
