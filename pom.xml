@@ -65,7 +65,7 @@
         <configuration>
           <argLine>--enable-native-access=ALL-UNNAMED</argLine>
           <systemPropertyVariables>
-            <loadtest.video>${project.basedir}/movie.mp4</loadtest.video>
+            <loadtest.video>${project.basedir}/loadtest.mp4</loadtest.video>
           </systemPropertyVariables>
         </configuration>
         <executions>

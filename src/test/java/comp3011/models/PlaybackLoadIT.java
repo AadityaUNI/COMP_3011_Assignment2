@@ -13,6 +13,7 @@ import comp3011.views.VideoPlayerView;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -37,8 +38,9 @@ import javafx.stage.Screen;
 import javafx.stage.Stage;
 
 /**
- * Plays the first minute of {@code movie.mp4} on both players under 6 and 12 stacked effects, in a real window,
- * and counts on every frame shown:
+ * Plays {@code loadtest.mp4} (the first minute of the assignment's movie.mp4, committed because the full video
+ * is over GitHub's 100MB limit) on both players under 6 and 12 stacked effects, in a real window, and counts on
+ * every frame shown:
  * <ul>
  * <li><b>late frames</b>: shown more than one frame duration (41.7ms at 24fps) after it was due. Up to one JavaFX
  * pulse (~16.7ms) of lateness is normal, since frames can only go on screen at a pulse.</li>
@@ -47,7 +49,7 @@ import javafx.stage.Stage;
  * Fails if the multi-threaded player does worse than the single-threaded one on either count.
  *
  * <p>
- * Run with {@code mvn verify}. Needs a display (a real window is opened) and {@code movie.mp4} in the project root,
+ * Run with {@code mvn verify}. Needs a display (a real window is opened) and {@code loadtest.mp4} in the project root,
  * or another video passed with {@code -Dloadtest.video=path}. Takes about 4-5 minutes (4 one-minute runs).
  * </p>
  */
@@ -67,12 +69,16 @@ class PlaybackLoadIT {
     private static long clipDurationUs;
     private static long frameDurationNs;
     private static int warmUpFrames;
+    private static boolean startedJavaFx;
 
+    // Skips (rather than fails) when there is no video or no display, e.g. on a headless build server where
+    // *.mp4 is not checked in, so "mvn verify" still passes there. Developers run it locally with both.
     @BeforeAll
     static void setUp() throws Exception {
-        File source = new File(System.getProperty("loadtest.video", "movie.mp4"));
-        assertTrue(source.isFile(), "Load test needs a video: put movie.mp4 in the project root or pass "
+        File source = new File(System.getProperty("loadtest.video", "loadtest.mp4"));
+        assumeTrue(source.isFile(), "Skipping load test: no video. Put loadtest.mp4 in the project root or pass "
                 + "-Dloadtest.video=<path>. Looked for " + source.getAbsolutePath());
+        assumeTrue(hasDisplay(), "Skipping load test: no display to open the player window on");
         clip = clipFirstMinute(source);
 
         try (FFmpegFrameGrabber grabber = new FFmpegFrameGrabber(clip)) {
@@ -88,13 +94,26 @@ class PlaybackLoadIT {
             Platform.startup(() -> { });
         } catch (IllegalStateException alreadyStarted) {
             // Fine: another test in this JVM started JavaFX.
+        } catch (RuntimeException noDisplay) {
+            assumeTrue(false, "Skipping load test: JavaFX could not start (" + noDisplay.getMessage() + ")");
         }
+        startedJavaFx = true;
         Platform.setImplicitExit(false); // keep JavaFX alive between runs, when no window is open
     }
 
     @AfterAll
     static void tearDown() {
-        Platform.exit();
+        if (startedJavaFx) {
+            Platform.exit();
+        }
+    }
+
+    // On Linux a window needs an X11 or Wayland display; Windows and macOS always have one when run locally.
+    private static boolean hasDisplay() {
+        if (!System.getProperty("os.name", "").toLowerCase().contains("linux")) {
+            return true;
+        }
+        return System.getenv("DISPLAY") != null || System.getenv("WAYLAND_DISPLAY") != null;
     }
 
     @ParameterizedTest(name = "{0} effects")
