@@ -28,3 +28,4 @@ rubric.md
 # video files
 *.mp4
 !loadtest.mp4
+changes.txt
