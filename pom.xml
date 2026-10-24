@@ -56,6 +56,27 @@
             </options>
         </configuration>
       </plugin>
+      <!-- Runs *IT.java integration tests during "mvn verify": PlaybackLoadIT compares the single and
+           multi-threaded players under load. It opens a real window, so it needs a display. -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-failsafe-plugin</artifactId>
+        <version>3.5.4</version>
+        <configuration>
+          <argLine>--enable-native-access=ALL-UNNAMED</argLine>
+          <systemPropertyVariables>
+            <loadtest.video>${project.basedir}/movie.mp4</loadtest.video>
+          </systemPropertyVariables>
+        </configuration>
+        <executions>
+          <execution>
+            <goals>
+              <goal>integration-test</goal>
+              <goal>verify</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
     </plugins>
   </build>
 

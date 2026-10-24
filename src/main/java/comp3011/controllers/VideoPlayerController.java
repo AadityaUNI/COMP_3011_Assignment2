@@ -8,7 +8,13 @@
  *
  * Copyright 2026 Simon Ratcliffe
  */
-package comp3011;
+package comp3011.controllers;
+
+import comp3011.frameprocessors.FrameProcessor;
+import comp3011.models.MultiThreadedVideoPlayerModel;
+import comp3011.models.SingleThreadedVideoPlayerModel;
+import comp3011.models.VideoPlayerModel;
+import comp3011.views.VideoPlayerView;
 
 import java.io.File;
 import java.util.ArrayList;

@@ -1,10 +1,11 @@
 /*
- * Tests for the command line parsing in comp3011.CommandLineController.
+ * Tests for the command line parsing in comp3011.controllers.CommandLineController.
  *
  * Authors:
  *   1. Aaditya Singh, A1946894
  */
-import comp3011.CommandLineController;
+package comp3011.controllers;
+
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -15,6 +16,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
 public class CommandLineControllerTests {
@@ -53,6 +55,15 @@ public class CommandLineControllerTests {
         assertEquals(true, mixed.isMaximiseRequested());
         assertEquals(2, mixed.getDisplayId());
         assertNotNull(mixed.getVideoFile());
+    }
+
+    @Test
+    void repeatedEffectsParse() throws IOException {
+        // the same effect can be given more than once, and each use gets its own processor
+        CommandLineController repeated = new CommandLineController(new String[]{"-sns", video()});
+        assertNull(repeated.getErrorMessage());
+        assertEquals(List.of("FrameScratcher", "FrameNumberer", "FrameScratcher"), processorNames(repeated));
+        assertNotSame(repeated.getProcessors().get(0), repeated.getProcessors().get(2));
     }
 
     @Test

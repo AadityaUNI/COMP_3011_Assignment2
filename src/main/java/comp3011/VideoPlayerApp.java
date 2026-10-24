@@ -10,6 +10,10 @@
  */
 package comp3011;
 
+import comp3011.controllers.CommandLineController;
+import comp3011.controllers.VideoPlayerController;
+import comp3011.views.VideoPlayerView;
+
 import java.util.List;
 
 import javafx.application.Application;

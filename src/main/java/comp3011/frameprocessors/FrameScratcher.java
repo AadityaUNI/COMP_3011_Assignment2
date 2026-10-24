@@ -8,7 +8,7 @@
  *
  * Copyright 2026 Simon Ratcliffe
  */
-package comp3011;
+package comp3011.frameprocessors;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;

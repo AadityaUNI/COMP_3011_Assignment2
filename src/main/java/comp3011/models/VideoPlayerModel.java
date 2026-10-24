@@ -8,7 +8,7 @@
  *
  * Copyright 2026 Simon Ratcliffe
  */
-package comp3011;
+package comp3011.models;
 
 import java.io.File;
 
@@ -16,7 +16,7 @@ import java.io.File;
  * The model part of the video player model-view-controller architecture.
  *
  * <p>
- * Defines the playback operations the {@link VideoPlayerController} drives, so the
+ * Defines the playback operations the {@link comp3011.controllers.VideoPlayerController} drives, so the
  * controller is independent of the concurrency model in use. Implementations are
  * {@link MultiThreadedVideoPlayerModel} (the default) and
  * {@link SingleThreadedVideoPlayerModel} (the original reference design, selected with {@code --single}).
@@ -40,4 +40,7 @@ public interface VideoPlayerModel {
     void stopPlayback();
 
     void shutdown();
+
+    // Measurement only: lets the load test time every frame shown. Pass FrameTimingListener.NONE to stop.
+    void setFrameTimingListener(FrameTimingListener listener);
 }

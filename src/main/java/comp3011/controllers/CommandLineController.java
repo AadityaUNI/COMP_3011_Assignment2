@@ -8,7 +8,20 @@
  *
  * Copyright 2026 Simon Ratcliffe
  */
-package comp3011;
+package comp3011.controllers;
+
+import comp3011.frameprocessors.FrameBlackAndWhiter;
+import comp3011.frameprocessors.FrameBleeder;
+import comp3011.frameprocessors.FrameDuster;
+import comp3011.frameprocessors.FrameFlickerer;
+import comp3011.frameprocessors.FrameJitterer;
+import comp3011.frameprocessors.FrameMottler;
+import comp3011.frameprocessors.FrameNumberer;
+import comp3011.frameprocessors.FramePepperer;
+import comp3011.frameprocessors.FrameProcessor;
+import comp3011.frameprocessors.FrameScratcher;
+import comp3011.frameprocessors.FrameVignetter;
+import comp3011.frameprocessors.FrameYellower;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -22,7 +35,7 @@ import java.util.function.Supplier;
  * <p>
  * Extracts the video file and supported launch options, reports invalid input
  * or help text, and exposes the resulting launch configuration via methods to the
- * {@link VideoPlayerApp}.
+ * {@link comp3011.VideoPlayerApp}.
  * </p>
  */
 public class CommandLineController {
@@ -38,14 +51,12 @@ public class CommandLineController {
     private ArrayList<FrameProcessor> processorsRequested = new ArrayList<>();
     private final HashMap<Character, Supplier<FrameProcessor>> validEffects = new HashMap<>();
 
-    // All valid effects, keyed by the single letter used on the command line (e.g. "-jm" applies jitter then mottle).
-    // To add a new effect:
-    //   1. Write a class extending FrameProcessor. Override initialise() for one-off setup per video and process()
-    //      for the per-frame work. The multi-threaded model shares one instance between concurrent workers, so
-    //      process() must keep per-frame state in local variables, not fields.
+    // Valid effects, keyed by command-line letter (e.g. "-jm" = jitter then mottle). To add a new effect:
+    //   1. Extend FrameProcessor: initialise() for per-video setup, process() per frame. One instance is shared
+    //      by concurrent workers, so process() must keep per-frame state in locals, not fields.
     //   2. Register it here with an unused letter, e.g. validEffects.put('x', FrameExample::new);
-    //   3. List the letter in the help text printed by --help, and add it to the tests.
-    // A Supplier (not an instance) is stored so each run gets a fresh processor, in the order the user typed them.
+    //   3. Add the letter to printHelp() and to the tests.
+    // Suppliers, not instances, so each letter typed gets its own processor.
     {
         validEffects.put('n', FrameNumberer::new);
         validEffects.put('s', FrameScratcher::new);

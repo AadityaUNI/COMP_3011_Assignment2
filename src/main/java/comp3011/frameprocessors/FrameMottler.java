@@ -6,9 +6,18 @@
  *   1. Simon Ratcliffe, in collaboration with GPT-5.6 Terra
  *   2. Aaditya Singh, A1946894
  *
+ * Diff from starter code (FrameMottlerLegacy.java keeps the original, to make one instance safe to share):
+ *   Removed: the blockBlueScaleIndex/blockGreenScaleIndex/blockRedScaleIndex fields, the cachedDamageMaskSegment,
+ *            damageMaskA and damageMaskB fields, and ensureDamageMaskFields().
+ *   Added:   damageMaskCache (3-slot AtomicReferenceArray of immutable DamageMask records) and damageMask(index);
+ *            initialise() clears the cache.
+ *   Changed: setBlockScaleIndices -> computeBlockScaleIndices, which returns the indices as an int[];
+ *            prepareScaleIndicesForBlock returns that int[] (null if undamaged) instead of a boolean;
+ *            mottleFrame, sampleDamageMask and applyMottleBlock take the masks/indices as parameters.
+ *
  * Copyright 2026 Simon Ratcliffe
  */
-package comp3011;
+package comp3011.frameprocessors;
 
 import java.nio.ByteBuffer;
 import java.util.Random;
@@ -16,24 +25,17 @@ import java.util.concurrent.atomic.AtomicReferenceArray;
 
 import org.bytedeco.javacv.Frame;
 
-/**
+/*
  * Adds uneven brightness and colour staining to simulate aged film emulsion.
  * Having played around with the tuning of this as much as I'd like, but the
  * effect still looks okay.
  *
- * <p>
  * Initialisation builds multi-scale noise fields and colour lookup tables.
- * {@link #process(Frame, InfoFrame)} samples those fields in image blocks and
- * applies the selected channel scales through {@link #applyMottleBlock(ByteBuffer, int, int, int, int, int, int, int[])}.
- * </p>
+ * process samples those fields in image blocks and applies the selected
+ * channel scales through applyMottleBlock.
  *
- * <p>
- * Thread safety: the multi-threaded model shares this one instance between concurrent workers, each processing a
- * different frame. Everything set in {@link #initialise(InfoVideo)} is read-only afterwards, and the noise fields are
- * built from local arrays seeded by the frame number, so a frame's result does not depend on which worker ran it.
- * The only state workers change is {@code damageMaskCache}, which is deliberately safe to race on (see
- * {@link #damageMask(int)}).
- * </p>
+ * Thread safety: one instance is shared by concurrent workers. Fields set in initialise() are read-only after;
+ * per-frame state is local. Only damageMaskCache is shared, and is safe to race on (see damageMask).
  */
 public class FrameMottler extends FrameProcessor {
     private static final int NOISE_GRID_WIDTH = 64;
@@ -332,9 +334,7 @@ public class FrameMottler extends FrameProcessor {
         }
     }
 
-    /**
-     * Returns the blue, green and red scale lookup indices for the block, or null if the block is undamaged.
-     */
+    // Returns the blue, green and red scale lookup indices for the block, or null if the block is undamaged.
     private int[] prepareScaleIndicesForBlock(
             int x,
             int y,

@@ -6,31 +6,28 @@
  *   1. Simon Ratcliffe, in collaboration with GPT-5.6 Terra
  *   2. Aaditya Singh, A1946894
  *
+ * Diff from starter code (to make one instance safe to share between effect workers):
+ *   Removed: the brightMask, horizontalBlurMask and blurredMask fields and their allocation in initialise().
+ *   Added:   process() allocates the three masks as locals.
+ *   Changed: buildBrightMask, blurBrightMask, applyBleed and sampleBlurredMask take the masks as parameters.
+ *
  * Copyright 2026 Simon Ratcliffe
  */
-package comp3011;
+package comp3011.frameprocessors;
 
 import java.nio.ByteBuffer;
 
 import org.bytedeco.javacv.Frame;
 
-/**
+/*
  * Simulates bright light bleeding into nearby pixels, with a warm colour bias.
  * This one is expensive in CPU time!
  *
- * <p>
- * For each frame, {@link #buildBrightMask(ByteBuffer)} identifies bright
- * regions, {@link #blurBrightMask()} spreads their influence, and
- * {@link #applyBleed(ByteBuffer)} adds the resulting coloured glow.
- * </p>
+ * For each frame, buildBrightMask identifies bright regions, blurBrightMask
+ * spreads their influence, and applyBleed adds the resulting coloured glow.
  *
- * <p>
- * Thread safety: the multi-threaded model shares this one instance between concurrent workers, each processing a
- * different frame. The fields below are therefore only written in {@link #initialise(InfoVideo)} (before any
- * worker runs) and are read-only afterwards. The per-frame masks are allocated inside
- * {@link #process(Frame, InfoFrame)} and passed down as arguments, never stored in fields, so two frames can never
- * see each other's masks.
- * </p>
+ * Thread safety: one instance is shared by concurrent workers. Fields are only written in initialise();
+ * the per-frame masks are locals passed down as arguments, so workers never see each other's masks.
  */
 public class FrameBleeder extends FrameProcessor {
     private static final int MASK_BLOCK_SIZE = 4;

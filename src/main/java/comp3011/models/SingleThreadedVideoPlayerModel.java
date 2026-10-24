@@ -8,7 +8,11 @@
  *
  * Copyright 2026 Simon Ratcliffe
  */
-package comp3011;
+package comp3011.models;
+
+import comp3011.frameprocessors.FrameProcessor;
+import comp3011.frameprocessors.InfoFrame;
+import comp3011.frameprocessors.InfoVideo;
 
 import java.io.File;
 import java.util.ArrayDeque;
@@ -34,7 +38,7 @@ import javafx.scene.image.Image;
  * Owns the FFmpeg decoder, playback clock, seeking logic, audio scheduling,
  * and frame processing - which it all manages through cooperative multi-tasking
  * on a single thread. It publishes decoded frames and playback state through
- * callbacks supplied by its owning {@link VideoPlayerController}, keeping it
+ * callbacks supplied by its owning {@link comp3011.controllers.VideoPlayerController}, keeping it
  * decoupled from the JavaFX view.
  * </p>
  *
@@ -94,6 +98,7 @@ public class SingleThreadedVideoPlayerModel implements VideoPlayerModel {
     private long playbackStartNs;
     private long pauseStartedNs;
     private long relativeSeekBaseUs = NO_SEEK_REQUEST;
+    private FrameTimingListener frameTimingListener = FrameTimingListener.NONE; // measurement hook, no effect on playback
 
     public SingleThreadedVideoPlayerModel(
             boolean audioEnabled,
@@ -178,6 +183,10 @@ public class SingleThreadedVideoPlayerModel implements VideoPlayerModel {
 
     public void shutdown() {
         closePlaybackResources();
+    }
+
+    public void setFrameTimingListener(FrameTimingListener listener) {
+        frameTimingListener = listener;
     }
 
     private void seekRelative(long offsetUs) {
@@ -415,6 +424,7 @@ public class SingleThreadedVideoPlayerModel implements VideoPlayerModel {
             }
         }
 
+        frameTimingListener.frameShown(frame.frameNumber(), frame.targetTimeNs(), frame.preparedAtNs(), now);
         notifyFrameReady(frame.image());
     }
 

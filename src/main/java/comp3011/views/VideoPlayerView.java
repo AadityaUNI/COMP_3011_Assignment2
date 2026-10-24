@@ -8,7 +8,7 @@
  *
  * Copyright 2026 Simon Ratcliffe
  */
-package comp3011;
+package comp3011.views;
 
 import javafx.geometry.Insets;
 import javafx.geometry.Point2D;
@@ -38,7 +38,7 @@ import javafx.scene.shape.StrokeLineCap;
  * This is the JavaFX presentation layer for the video player. It builds the
  * scene graph containing the video surface, playback controls, status display,
  * and tooltips. It exposes controls and display-update methods for
- * {@link VideoPlayerController}, but contains no playback logic (which all lives
+ * {@link comp3011.controllers.VideoPlayerController}, but contains no playback logic (which all lives
  * in the controller).
  * </p>
  */

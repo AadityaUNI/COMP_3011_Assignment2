@@ -6,32 +6,30 @@
  *   1. Simon Ratcliffe, in collaboration with GPT-5.6 Terra
  *   2. Aaditya Singh, A1946894
  *
+ * Diff from starter code (to make one instance safe to share between effect workers):
+ *   Removed: the sourcePixels and blackRow fields and their allocation in initialise().
+ *   Added:   jitterFrame() allocates sourcePixels and blackRow as locals.
+ *
  * Copyright 2026 Simon Ratcliffe
  */
-package comp3011;
+package comp3011.frameprocessors;
 
 import java.nio.ByteBuffer;
 import java.util.Random;
 
 import org.bytedeco.javacv.Frame;
 
-/**
+/*
  * Randomly offsets each image frame to simulate unstable film transport. The sprockets driving film through old
  * projectors always had a tiny bit of slack or take-up in them, causing frames to jitter up and down or left and right
  * slightly as they went through the projection bed. Simple but effective little effect.
  *
- * <p>
  * A deterministic per-frame random sequence chooses horizontal and vertical
- * offsets. {@link #jitterFrame(ByteBuffer, int, int)} copies the original pixels
- * into the shifted position and fills exposed areas with black.
- * </p>
+ * offsets. jitterFrame copies the original pixels into the shifted position
+ * and fills exposed areas with black.
  *
- * <p>
- * Thread safety: the multi-threaded model shares this one instance between concurrent workers, each processing a
- * different frame. {@code mediaSeed} is only written in {@link #initialise(InfoVideo)} and the {@code Random} is
- * created fresh from the frame number inside {@link #process(Frame, InfoFrame)}, so the result for a frame depends
- * only on that frame and never on which worker ran it or in what order.
- * </p>
+ * Thread safety: one instance is shared by concurrent workers. mediaSeed is only written in initialise();
+ * the Random and pixel buffers are per-frame locals.
  */
 public class FrameJitterer extends FrameProcessor {
     private static final int SEED_SALT = 0x4a495454;

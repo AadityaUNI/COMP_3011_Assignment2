@@ -8,7 +8,7 @@
  *
  * Copyright 2026 Simon Ratcliffe
  */
-package comp3011;
+package comp3011.frameprocessors;
 
 import java.nio.charset.StandardCharsets;
 import java.util.zip.CRC32;
@@ -19,7 +19,7 @@ import org.bytedeco.javacv.Frame;
  * Base class for all the video player's frame-based compositing effects.
  *
  * <p>
- * {@link VideoPlayerModel} initialises each processor once with video metadata,
+ * {@link comp3011.models.VideoPlayerModel} initialises each processor once with video metadata,
  * then invokes {@link #process(Frame, InfoFrame)} for every image frame in a set order
  * before it is converted for display. Note that all FrameProcessors should be written
  * to be deterministic - that is they apply the same effect to the same frame number of
